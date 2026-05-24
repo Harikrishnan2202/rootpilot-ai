@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # RootPilot AI - Incident Root Cause Analyzer
 
 > AI-powered incident intelligence for SRE teams. Detect, explain, and prevent system failures.
@@ -97,3 +98,7 @@ Backend	           FastAPI, Python 3.12
 AI	           Google Gemini 1.5 Flash (or OpenAI GPT-3.5)
 HTTP                     Client	Axios
 
+=======
+# rootpilot-ai
+AI-Powered Incident Root Cause Analyzer for SRE Teams
+>>>>>>> 833bf1d785312361c5a90af0f4b3d680562b826b

@@ -72,6 +72,11 @@ class ChatRequest(BaseModel):
     incident_id: Optional[str] = None
     logs_context: Optional[List[LogEntry]] = None
 
+class ChatContextRequest(BaseModel):
+    session_id: str
+    logs: List[LogEntry]
+    analysis: Optional[Dict[str, Any]] = None
+
 # ========== Response Models ==========
 class AnalyzeResponse(BaseModel):
     success: bool

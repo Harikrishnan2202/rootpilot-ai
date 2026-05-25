@@ -1,4 +1,5 @@
 import json
+from collections import Counter
 from typing import List, Dict, Any, Optional
 import google.generativeai as genai
 from openai import OpenAI
@@ -18,23 +19,26 @@ class ChatEngine:
         self.conversation_history = {}  # Store history per session/incident
         self.model = None
         self.client = None
+        self.gemini_model_names = ['gemini-1.5-flash', 'gemini-pro']
         
         try:
             if self.provider == "gemini":
+                if not Config.GEMINI_API_KEY:
+                    print("Warning: GEMINI_API_KEY is not set. Chat fallback responses will be used.")
+                    return
                 genai.configure(api_key=Config.GEMINI_API_KEY)
                 # Try models in order of preference
-                model_names = ['gemini-1.5-flash-latest', 'gemini-1.5-flash', 'gemini-pro', 'gemini-pro-vision']
-                for model_name in model_names:
-                    try:
-                        self.model = genai.GenerativeModel(model_name)
-                        break
-                    except Exception:
-                        continue
+                for model_name in self.gemini_model_names:
+                    self.model = genai.GenerativeModel(model_name)
+                    break
                 
                 if not self.model:
                     self.model = genai.GenerativeModel('gemini-pro')
             elif self.provider == "openai":
-                self.client = OpenAI(api_key=Config.OPENAI_API_KEY)
+                if not Config.OPENAI_API_KEY:
+                    print("Warning: OPENAI_API_KEY is not set. Chat fallback responses will be used.")
+                    return
+                self.client = OpenAI(api_key=Config.OPENAI_API_KEY, timeout=15.0)
         except Exception as e:
             print(f"Warning: ChatEngine LLM initialization error: {e}. Fallback responses will be used.")
     
@@ -106,11 +110,10 @@ Answer:"""
         try:
             if not self.model and not self.client:
                 # LLM not initialized, provide helpful fallback
-                return "The AI assistant is currently being configured. Please ensure your API keys are set in the .env file and restart the backend server."
+                return self._fallback_answer(question, logs, analysis)
             
             if self.provider == "gemini" and self.model:
-                response = self.model.generate_content(prompt)
-                answer = response.text.strip()
+                answer = self._generate_with_gemini(prompt).strip()
             elif self.provider == "openai" and self.client:
                 response = self.client.chat.completions.create(
                     model="gpt-3.5-turbo",
@@ -137,16 +140,68 @@ Answer:"""
             
             # Specific error handling for common issues
             if "not found" in error_msg or "api_version" in error_msg or "model" in error_msg:
-                return "The AI model is currently unavailable. The backend may not have valid API credentials configured. Please check your GEMINI_API_KEY or OPENAI_API_KEY in the .env file."
+                return self._fallback_answer(question, logs, analysis)
             elif "invalid_api_key" in error_msg or "unauthorized" in error_msg or "401" in error_msg:
-                return "Authentication failed with the AI service. Please verify your API key is valid and properly configured in the .env file."
+                return self._fallback_answer(question, logs, analysis)
             elif "rate_limit" in error_msg or "429" in error_msg:
-                return "The AI service is rate-limited. Please wait a moment and try again."
+                return self._fallback_answer(question, logs, analysis)
             elif "timeout" in error_msg:
-                return "The AI service request timed out. Please try again."
+                return self._fallback_answer(question, logs, analysis)
             else:
                 # Generic fallback with helpful context
-                return f"The AI service encountered an error. Please ensure your API keys are configured correctly. Error: {str(e)[:80]}"
+                return self._fallback_answer(question, logs, analysis)
+
+    def _generate_with_gemini(self, prompt: str) -> str:
+        """Try configured Gemini model names before falling back."""
+        last_error = None
+        for model_name in self.gemini_model_names:
+            try:
+                model = genai.GenerativeModel(model_name)
+                response = model.generate_content(prompt)
+                return response.text
+            except Exception as e:
+                last_error = e
+        raise last_error or RuntimeError("No Gemini models were available")
+
+    def _fallback_answer(
+        self,
+        question: str,
+        logs: List[LogEntry],
+        analysis: Optional[RootCauseAnalysis] = None
+    ) -> str:
+        """Local, deterministic answer when the configured LLM is unavailable."""
+        level_counts = Counter(log.level for log in logs)
+        service_errors = Counter(log.service.value for log in logs if log.level == "ERROR")
+        service_warnings = Counter(log.service.value for log in logs if log.level == "WARNING")
+        top_error_service = service_errors.most_common(1)
+        top_warning_service = service_warnings.most_common(1)
+        latest_problem = next((log for log in reversed(logs) if log.level in {"ERROR", "WARNING"}), None)
+
+        if analysis and analysis.root_causes:
+            top_cause = analysis.root_causes[0]
+            return (
+                f"The current analysis points to {top_cause.cause} "
+                f"with {top_cause.confidence}% confidence. "
+                f"Start with {analysis.recommendations[0].action.lower() if analysis.recommendations else 'checking the affected service logs'}."
+            )
+
+        if top_error_service:
+            service, count = top_error_service[0]
+            latest_text = f" Latest signal: {latest_problem.service.value} reported \"{truncate_string(latest_problem.message, 90)}\"." if latest_problem else ""
+            return (
+                f"I found {count} error log{'s' if count != 1 else ''} in {service}. "
+                f"Across the current window there are {level_counts.get('ERROR', 0)} errors and {level_counts.get('WARNING', 0)} warnings."
+                f"{latest_text}"
+            )
+
+        if top_warning_service:
+            service, count = top_warning_service[0]
+            return (
+                f"No critical errors are visible in the current logs, but {service} has {count} warning "
+                f"log{'s' if count != 1 else ''}. I would watch that service first and generate more logs if the issue continues."
+            )
+
+        return "The current logs look healthy: no errors or warnings are visible in the latest sample."
     
     def get_suggested_questions(self, logs: List[LogEntry], analysis: Optional[RootCauseAnalysis] = None) -> List[str]:
         """Generate suggested follow-up questions based on context."""

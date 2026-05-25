@@ -20,8 +20,8 @@ app = FastAPI(
 # Configure CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=Config.CORS_ORIGINS,
-    allow_credentials=True,
+    allow_origins=["*"],
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -57,12 +57,12 @@ async def startup_event():
     """Validate configuration on startup."""
     try:
         Config.validate()
-        print(f"✅ RootPilot AI backend started successfully")
-        print(f"📡 LLM Provider: {Config.LLM_PROVIDER}")
-        print(f"🌐 CORS Origins: {Config.CORS_ORIGINS}")
-        print(f"🚀 Server will run on http://{Config.HOST}:{Config.PORT}")
+        print("[OK] RootPilot AI backend started successfully")
+        print(f"[INFO] LLM Provider: {Config.LLM_PROVIDER}")
+        print(f"[INFO] CORS Origins: {Config.CORS_ORIGINS}")
+        print(f"[INFO] Server will run on http://{Config.HOST}:{Config.PORT}")
     except ValueError as e:
-        print(f"❌ Configuration error: {e}")
+        print(f"[WARN] Configuration error: {e}")
         print("Please check your .env file and ensure API keys are set correctly.")
         # Don't raise, allow app to start but endpoints will fail gracefully
 

@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException
 from typing import Optional, List
-from ..models import ChatRequest, ChatResponse, LogEntry
+from ..models import ChatRequest, ChatResponse, ChatContextRequest, LogEntry
 from ..services.chat_engine import chat_engine
 from ..services.root_cause import analyzer
 from ..utils.helpers import generate_id
@@ -67,24 +67,20 @@ async def chat_endpoint(request: ChatRequest):
         )
 
 @router.post("/context")
-async def set_chat_context(
-    session_id: str,
-    logs: List[LogEntry],
-    analysis: Optional[dict] = None
-):
+async def set_chat_context(request: ChatContextRequest):
     """
     Set or update the context (logs and analysis) for a chat session.
     This allows the chat to remember the incident details.
     """
     try:
-        log_context_store[session_id] = logs
-        if analysis:
-            analysis_store[session_id] = analysis
+        log_context_store[request.session_id] = request.logs
+        if request.analysis:
+            analysis_store[request.session_id] = request.analysis
         return {
             "success": True,
-            "message": f"Context set for session {session_id}",
-            "logs_count": len(logs),
-            "analysis_available": analysis is not None
+            "message": f"Context set for session {request.session_id}",
+            "logs_count": len(request.logs),
+            "analysis_available": request.analysis is not None
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

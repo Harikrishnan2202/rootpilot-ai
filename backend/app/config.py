@@ -19,7 +19,14 @@ class Config:
     PORT = int(os.getenv("PORT", 8000))
     
     # CORS
-    CORS_ORIGINS = os.getenv("CORS_ORIGINS", "http://localhost:3000").split(",")
+    CORS_ORIGINS = [
+        origin.strip()
+        for origin in os.getenv(
+            "CORS_ORIGINS",
+            "http://localhost:3000,http://localhost:3001"
+        ).split(",")
+        if origin.strip()
+    ]
     
     # Log simulation settings
     LOG_REFRESH_INTERVAL_MS = int(os.getenv("LOG_REFRESH_INTERVAL_MS", 2000))

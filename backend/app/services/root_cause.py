@@ -21,24 +21,27 @@ class RootCauseAnalyzer:
         self.provider = Config.LLM_PROVIDER
         self.model = None
         self.client = None
+        self.gemini_model_names = ['gemini-1.5-flash', 'gemini-pro']
         
         try:
             if self.provider == "gemini":
+                if not Config.GEMINI_API_KEY:
+                    print("Warning: GEMINI_API_KEY is not set. Fallback analysis will be used.")
+                    return
                 genai.configure(api_key=Config.GEMINI_API_KEY)
                 # Try models in order of preference (latest first)
-                model_names = ['gemini-1.5-flash-latest', 'gemini-1.5-flash', 'gemini-pro', 'gemini-pro-vision']
-                for model_name in model_names:
-                    try:
-                        self.model = genai.GenerativeModel(model_name)
-                        break
-                    except Exception:
-                        continue
+                for model_name in self.gemini_model_names:
+                    self.model = genai.GenerativeModel(model_name)
+                    break
                 
                 if not self.model:
                     # Fallback to generic initialization
                     self.model = genai.GenerativeModel('gemini-pro')
             elif self.provider == "openai":
-                self.client = OpenAI(api_key=Config.OPENAI_API_KEY)
+                if not Config.OPENAI_API_KEY:
+                    print("Warning: OPENAI_API_KEY is not set. Fallback analysis will be used.")
+                    return
+                self.client = OpenAI(api_key=Config.OPENAI_API_KEY, timeout=15.0)
             else:
                 raise ValueError(f"Unsupported LLM provider: {self.provider}")
         except Exception as e:
@@ -137,8 +140,7 @@ Requirements:
         
         try:
             if self.provider == "gemini" and self.model:
-                response = self.model.generate_content(prompt)
-                raw_text = response.text
+                raw_text = self._generate_with_gemini(prompt)
             elif self.provider == "openai" and self.client:
                 response = self.client.chat.completions.create(
                     model="gpt-3.5-turbo",
@@ -205,6 +207,18 @@ Requirements:
         except Exception as e:
             # Fallback: provide a basic analysis without LLM
             return self._fallback_analysis(logs, incident_id, error=str(e))
+
+    def _generate_with_gemini(self, prompt: str) -> str:
+        """Try configured Gemini model names before falling back."""
+        last_error = None
+        for model_name in self.gemini_model_names:
+            try:
+                model = genai.GenerativeModel(model_name)
+                response = model.generate_content(prompt)
+                return response.text
+            except Exception as e:
+                last_error = e
+        raise last_error or RuntimeError("No Gemini models were available")
     
     def _fallback_analysis(self, logs: List[LogEntry], incident_id: Optional[str], error: str) -> RootCauseAnalysis:
         """Fallback analysis when LLM fails."""
@@ -216,8 +230,12 @@ Requirements:
                 service_errors[log.service.value] = service_errors.get(log.service.value, 0) + 1
                 error_messages.append(log.message)
         
-        # Determine most affected service
-        most_affected = max(service_errors.items(), key=lambda x: x[1])[0] if service_errors else "unknown"
+        warning_services = {}
+        for log in logs:
+            if log.level == "WARNING":
+                warning_services[log.service.value] = warning_services.get(log.service.value, 0) + 1
+        service_signals = service_errors or warning_services
+        most_affected = max(service_signals.items(), key=lambda x: x[1])[0] if service_signals else "unknown"
         
         # Build simple timeline from errors
         timeline = []
@@ -232,13 +250,13 @@ Requirements:
         
         return RootCauseAnalysis(
             incident_id=incident_id or generate_id("incident"),
-            summary=f"High error count detected in {most_affected} service. LLM error: {error[:100]}",
+            summary=f"Heuristic analysis detected the strongest incident signal in {most_affected}.",
             root_causes=[
                 RootCauseCandidate(
-                    cause=f"Errors in {most_affected} service",
-                    confidence=min(70, len(error_messages) * 10),
-                    explanation=f"Found {len(error_messages)} error entries. Sample: {error_messages[0] if error_messages else 'No specific error messages'}",
-                    affected_services=list(service_errors.keys())
+                    cause=f"Errors or warnings in {most_affected} service",
+                    confidence=min(70, max(len(error_messages), sum(warning_services.values())) * 10),
+                    explanation=f"Found {len(error_messages)} error entries and {sum(warning_services.values())} warnings. Sample: {error_messages[0] if error_messages else 'No specific error messages'}",
+                    affected_services=list(service_signals.keys())
                 )
             ],
             timeline=timeline,
